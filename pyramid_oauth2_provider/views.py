@@ -12,26 +12,21 @@
 
 import logging
 
-from base64 import b64decode
-
 from pyramid.view import view_config
 from pyramid.security import NO_PERMISSION_REQUIRED
 from pyramid.security import authenticated_userid
 from pyramid.security import Authenticated
 from pyramid.httpexceptions import HTTPFound
-from six.moves.urllib.parse import urlparse
-from six.moves.urllib.parse import parse_qsl
-from six.moves.urllib.parse import ParseResult
-from six.moves.urllib.parse import urlencode
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from cryptography.exceptions import InvalidKey
+from urlparse import urlparse
+from urlparse import parse_qsl
+from urlparse import ParseResult
+from urllib import urlencode
 
 from .models import DBSession as db
 from .models import Oauth2Token
 from .models import Oauth2Code
 from .models import Oauth2RedirectUri
 from .models import Oauth2Client
-from .models import backend
 from .errors import InvalidToken
 from .errors import InvalidClient
 from .errors import InvalidRequest
@@ -42,7 +37,6 @@ from .interfaces import IAuthCheck
 from .jsonerrors import HTTPBadRequest
 from .jsonerrors import HTTPUnauthorized
 from .jsonerrors import HTTPMethodNotAllowed
-
 
 def require_https(handler):
     """
@@ -223,29 +217,7 @@ def oauth2_token(request):
         client_id=request.client_id).first()
 
     # Again, the authorization policy should catch this, but check again.
-    if not oauth2_settings('salt'):
-        raise ValueError('oauth2_provider.salt configuration required.')
-    salt = b64decode(oauth2_settings('salt').encode('utf-8'))
-    kdf = Scrypt(
-        salt=salt,
-        length=64,
-        n=2 ** 14,
-        r=8,
-        p=1,
-        backend=backend
-    )
-
-    try:
-        client_secret = request.client_secret
-        try:
-            client_secret = bytes(client_secret, 'utf-8')
-        except TypeError:
-            client_secret = client_secret.encode('utf-8')
-        kdf.verify(client_secret, client.client_secret)
-        bad_secret = False
-    except (AttributeError, InvalidKey):
-        bad_secret = True
-    if not client or bad_secret:
+    if not client or client.client_secret != request.client_secret:
         log.info('received invalid client credentials')
         return HTTPBadRequest(InvalidRequest(
             error_description='Invalid client credentials'))
@@ -263,25 +235,28 @@ def oauth2_token(request):
         return HTTPBadRequest(UnsupportedGrantType(error_description='Only '
             'password and refresh_token grant types are supported by this '
             'authentication server'))
-
+    del resp['user_id']
     add_cache_headers(request)
     return resp
 
 def handle_password(request, client):
-    if 'username' not in request.POST or 'password' not in request.POST:
-        log.info('missing username or password')
-        return HTTPBadRequest(InvalidRequest(error_description='Both username '
-            'and password are required to obtain a password based grant.'))
 
-    auth_check = request.registry.queryUtility(IAuthCheck)
-    user_id = auth_check().checkauth(request.POST.get('username'),
-                                     request.POST.get('password'))
-
-    if not user_id:
-        log.info('could not validate user credentials')
-        return HTTPUnauthorized(InvalidClient(error_description='Username and '
-            'password are invalid.'))
-
+    if 'username' not in request.POST :
+        log.info('missing username')
+        return HTTPBadRequest(InvalidRequest(error_description='username '
+            'required to obtain a password based grant.'))
+    from ambientauth.models.locurity.checkauth import OauthLocalAuthentication
+    user_id = OauthLocalAuthentication().checkauth(request.POST.get('username'), client.id)
+    
+    if user_id is not None:
+        from datetime import datetime
+        revoking_oauth2Token = db.query(Oauth2Token).filter(Oauth2Token.user_id == user_id,
+                                                           Oauth2Token.revoked == 'FALSE')
+        if revoking_oauth2Token is not None:
+            for token in revoking_oauth2Token:
+                token.revoked = 'TRUE'
+                token.revocation_date = datetime.utcnow()
+                db.add(token)
     auth_token = Oauth2Token(client, user_id)
     db.add(auth_token)
     db.flush()
@@ -291,11 +266,6 @@ def handle_refresh_token(request, client):
     if 'refresh_token' not in request.POST:
         log.info('refresh_token field missing')
         return HTTPBadRequest(InvalidRequest(error_description='refresh_token '
-            'field required'))
-
-    if 'user_id' not in request.POST:
-        log.info('user_id field missing')
-        return HTTPBadRequest(InvalidRequest(error_description='user_id '
             'field required'))
 
     auth_token = db.query(Oauth2Token).filter_by(
@@ -310,11 +280,6 @@ def handle_refresh_token(request, client):
         log.info('invalid client_id')
         return HTTPBadRequest(InvalidClient(error_description='Client does '
             'not own this refresh_token.'))
-
-    if str(auth_token.user_id) != request.POST.get('user_id'):
-        log.info('invalid user_id')
-        return HTTPBadRequest(InvalidClient(error_description='The given '
-            'user_id does not match the given refresh_token.'))
 
     new_token = auth_token.refresh()
     db.add(new_token)
