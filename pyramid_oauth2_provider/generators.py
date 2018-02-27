@@ -22,10 +22,10 @@ def _get_hash():
     return sha
 
 def gen_client_id():
-    return _get_hash().hexdigest()
+    return _get_hash().hexdigest()[0:10]
 
 def gen_client_secret():
-    return _get_hash().hexdigest()
+    return _get_hash().hexdigest()[0:10]
 
 def gen_token(client):
     sha = _get_hash()
