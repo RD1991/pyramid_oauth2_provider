@@ -43,7 +43,7 @@ class Oauth2Client(Base):
     __table_args__ = {'schema': 'oauth'}
     id = Column(Integer, primary_key=True)
     client_id = Column(String(64), unique=True, nullable=False)
-    client_secret = Column(String(64), unique=True, nullable=False)
+    client_secret = Column(String, unique=True, nullable=False)
     revoked = Column(Boolean, default=False)
     revocation_date = Column(DateTime)
 
