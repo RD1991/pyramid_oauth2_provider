@@ -217,7 +217,8 @@ def oauth2_token(request):
         client_id=request.client_id).first()
 
     # Again, the authorization policy should catch this, but check again.
-    if not client or client.client_secret != request.client_secret:
+    #if not client or client.client_secret != request.client_secret:
+    if not client or not validate_client_secret(request.client_secret,client.client_secret):
         log.info('received invalid client credentials')
         return HTTPBadRequest(InvalidRequest(
             error_description='Invalid client credentials'))
@@ -239,6 +240,14 @@ def oauth2_token(request):
     add_cache_headers(request)
     return resp
 
+def validate_client_secret(client_secret,hash_secret):
+    from passlib.apps import custom_app_context as pwd_context
+    # If there is no password, always return false
+    if client_secret is not None:
+        return pwd_context.verify(client_secret, hash_secret)
+    else:
+        return False
+    
 def handle_password(request, client):
 
     if 'username' not in request.POST :
